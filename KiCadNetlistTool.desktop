@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=KiCad Netlist Tool
+Comment=Extract netlist information from KiCad schematics for LLM documentation
+Exec=kicad-netlist-gui
+Icon=kicad
+Terminal=false
+Categories=Development;Electronics;
+Keywords=KiCad;netlist;schematic;LLM;documentation;

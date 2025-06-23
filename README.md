@@ -35,7 +35,25 @@ pip install -e .
 
 ## Usage
 
-### Basic usage
+### GUI Application (Recommended)
+```bash
+# Launch the GUI interface
+kicad-netlist-gui
+
+# Or via CLI
+python -m kicad_netlist_tool gui
+```
+
+**Features:**
+- 🖥️ Easy point-and-click interface
+- 🔄 Automatic file watching with configurable intervals
+- 📊 Built-in changelog tracking
+- 📁 Integrated file management
+- ⚙️ Always-on-top option for KiCad workflow integration
+
+See [GUI_README.md](GUI_README.md) for detailed GUI usage instructions.
+
+### Command Line Interface
 ```bash
 # Parse a single schematic file
 python -m kicad_netlist_tool parse path/to/your/schematic.kicad_sch

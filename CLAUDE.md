@@ -57,6 +57,13 @@ kicad-netlist-tool/
 - Install in development mode: `pip install -e .`
 
 ### Running the Tool
+
+#### GUI Interface (Recommended)
+- Launch GUI: `kicad-netlist-gui` or `python -m kicad_netlist_tool gui`
+- Features: directory navigation, automatic file watching, changelog tracking, always-on-top option
+- Quick access buttons for Examples, Home, and Current Directory
+
+#### Command Line Interface  
 - Parse single file: `python -m kicad_netlist_tool parse <schematic.kicad_sch>`
 - Parse project: `python -m kicad_netlist_tool parse <project_directory>`
 - Watch mode: `python -m kicad_netlist_tool watch <project_directory>`

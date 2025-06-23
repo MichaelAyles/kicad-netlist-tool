@@ -15,6 +15,13 @@ def cli():
 
 
 @cli.command()
+def gui():
+    """Launch the GUI interface."""
+    from .gui.main_window import main as gui_main
+    gui_main()
+
+
+@cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file (default: stdout)')
 @click.option('--format', '-f', type=click.Choice(['compact', 'markdown', 'json']), 

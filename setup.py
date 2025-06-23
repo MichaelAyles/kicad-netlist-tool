@@ -32,6 +32,7 @@ setup(
     entry_points={
         "console_scripts": [
             "kicad-netlist-tool=kicad_netlist_tool.__main__:main",
+            "kicad-netlist-gui=kicad_netlist_tool.gui.main_window:main",
         ],
     },
 )

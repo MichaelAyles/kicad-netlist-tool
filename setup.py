@@ -28,11 +28,12 @@ setup(
         "sexpdata>=1.0.0",
         "watchdog>=3.0.0",
         "click>=8.0.0",
+        "pystray>=0.19.0",
+        "Pillow>=8.0.0",
     ],
     entry_points={
         "console_scripts": [
-            "kicad-netlist-tool=kicad_netlist_tool.__main__:main",
-            "kicad-netlist-gui=kicad_netlist_tool.gui.main_window:main",
+            "kicad-netlist-tool=kicad_netlist_tool.gui.tray_app:main",
         ],
     },
 )

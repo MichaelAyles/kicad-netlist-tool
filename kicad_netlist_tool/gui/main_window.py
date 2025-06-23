@@ -9,10 +9,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import json
 
-from ..parser import KiCadSchematicParser
-from ..formatter import CompactFormatter
-from ..watcher import SchematicWatcher
+from ..service import get_netlist_service
 from ..tokenizer import SimpleTokenizer, TokenStats
+from ..shared_state import get_shared_state
 
 
 class ChangelogManager:
@@ -87,18 +86,68 @@ class KiCadNetlistGUI:
         self.root.title("KiCad Netlist Tool")
         self.root.geometry("750x650")
         
-        # State variables
-        self.watching = False
-        self.watcher_thread: Optional[threading.Thread] = None
-        self.project_path: Optional[Path] = None
-        self.output_path: Optional[Path] = None
+        # Get the service instance
+        self.service = get_netlist_service()
+        self.shared_state = get_shared_state()
+        
+        # UI state variables
         self.changelog_path: Optional[Path] = None
         self.changelog_manager: Optional[ChangelogManager] = None
-        self.stop_watching = threading.Event()
         self.token_stats = TokenStats()
+        
+        # Register callbacks with the service
+        self.service.add_status_callback(self.on_status_change)
+        self.service.add_log_callback(self.on_log_message)
         
         self.setup_ui()
         self.setup_menu()
+        
+        # Load shared state and update UI
+        self._load_shared_state()
+    
+    def on_status_change(self, status: str):
+        """Handle status changes from the service."""
+        try:
+            # Update status display in UI thread
+            self.root.after(0, self._update_status_display, status)
+        except (tk.TclError, AttributeError):
+            # UI might be destroyed
+            pass
+    
+    def on_log_message(self, message: str):
+        """Handle log messages from the service."""
+        try:
+            # Add to log in UI thread
+            self.root.after(0, self._add_log_message, message)
+        except (tk.TclError, AttributeError):
+            # UI might be destroyed
+            pass
+    
+    def _update_status_display(self, status: str):
+        """Update the status display (called in UI thread)."""
+        try:
+            self.status_var.set(status)
+            
+            # Update button text based on monitoring state
+            if self.service.is_monitoring():
+                self.start_button.config(text="Stop Watching")
+                self.status_label.config(foreground="orange")
+            else:
+                self.start_button.config(text="Start Watching")
+                if "error" in status.lower():
+                    self.status_label.config(foreground="red")
+                else:
+                    self.status_label.config(foreground="green")
+        except (tk.TclError, AttributeError):
+            pass
+    
+    def _add_log_message(self, message: str):
+        """Add a log message (called in UI thread)."""
+        try:
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
+        except (tk.TclError, AttributeError):
+            pass
         
     def setup_menu(self):
         """Setup the menu bar."""
@@ -119,6 +168,10 @@ class KiCadNetlistGUI:
         self.always_on_top = tk.BooleanVar()
         options_menu.add_checkbutton(label="Always on Top", variable=self.always_on_top,
                                    command=self.toggle_always_on_top)
+        
+        options_menu.add_separator()
+        options_menu.add_command(label="Minimize to Tray", command=self.minimize_to_tray)
+        options_menu.add_command(label="Start Tray Application", command=self.start_tray_app)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -224,6 +277,53 @@ class KiCadNetlistGUI:
         
         # Initial log message
         self.log("KiCad Netlist Tool started")
+    
+    def _load_shared_state(self):
+        """Load state from shared state manager."""
+        state = self.shared_state.get_state()
+        summary = self.service.get_status_summary()
+        
+        # Load project path
+        if summary['project_path']:
+            project_path = Path(summary['project_path'])
+            self.project_var.set(str(project_path))
+            self._setup_project_paths(project_path)
+        
+        # Load output file setting
+        if state.output_file:
+            self.output_var.set(state.output_file)
+        
+        # Load interval setting
+        if state.update_interval:
+            self.interval_var.set(str(state.update_interval))
+        
+        # Load and display statistics
+        if state.token_stats:
+            self.token_stats.original_tokens = state.token_stats.get('original_tokens', 0)
+            self.token_stats.compressed_tokens = state.token_stats.get('compressed_tokens', 0)
+            self.token_stats.original_size = state.token_stats.get('original_size', 0)
+            self.token_stats.compressed_size = state.token_stats.get('compressed_size', 0)
+            self.token_stats.file_count = state.token_stats.get('file_count', 0)
+            self.token_stats.component_count = state.component_count
+            self.token_stats.net_count = state.net_count
+            self.token_stats.connection_count = state.connection_count
+            self.update_statistics_display()
+        
+        # Update status display
+        if summary['monitoring']:
+            self._update_status_display("Monitoring for changes...")
+        else:
+            self._update_status_display("Ready")
+    
+    def _setup_project_paths(self, project_path: Path):
+        """Setup project-related paths."""
+        self.changelog_path = project_path / "netlist_changelog.txt"
+        self.changelog_manager = ChangelogManager(self.changelog_path)
+    
+    def _sync_service_settings(self):
+        """Sync UI settings to the service."""
+        self.service.set_output_file(self.output_var.get())
+        self.service.set_update_interval(int(self.interval_var.get()))
         
     def setup_statistics_panel(self, parent, row):
         """Setup the statistics display panel."""
@@ -384,7 +484,8 @@ class KiCadNetlistGUI:
         
     def select_project(self):
         """Select KiCad project directory."""
-        initial_dir = str(self.project_path) if self.project_path else str(Path.home())
+        current_path = self.service.get_project_path()
+        initial_dir = str(current_path) if current_path else str(Path.home())
         directory = filedialog.askdirectory(title="Select KiCad Project Directory", 
                                           initialdir=initial_dir)
         if directory:
@@ -401,20 +502,11 @@ class KiCadNetlistGUI:
                 messagebox.showerror("Error", f"Directory does not exist: {path}")
                 
     def set_project_path(self, path: Path):
-        """Set the project path and update UI."""
-        self.project_path = path
-        self.project_var.set(str(self.project_path))
-        
-        # Auto-set output paths
-        self.output_path = self.project_path / self.output_var.get()
-        self.changelog_path = self.project_path / "netlist_changelog.txt"
-        self.changelog_manager = ChangelogManager(self.changelog_path)
-        
-        self.log(f"Selected project: {self.project_path}")
-        
-        # Check for .kicad_sch files
-        sch_files = list(self.project_path.glob("*.kicad_sch"))
-        self.log(f"Found {len(sch_files)} schematic files")
+        """Set the project path using the service."""
+        if self.service.set_project_path(path):
+            self.project_var.set(str(path))
+            self._setup_project_paths(path)
+            # The service will handle logging and state updates
         
     def go_to_examples(self):
         """Navigate to the examples directory."""
@@ -438,122 +530,54 @@ class KiCadNetlistGUI:
             
     def toggle_watching(self):
         """Start or stop watching for file changes."""
-        if not self.project_path:
+        if not self.service.get_project_path():
             messagebox.showerror("Error", "Please select a project directory first")
             return
             
-        if not self.watching:
-            self.start_watching()
+        # Sync current settings to service
+        self._sync_service_settings()
+        
+        if not self.service.is_monitoring():
+            self.service.start_monitoring()
         else:
-            self.stop_watching_files()
-            
-    def start_watching(self):
-        """Start watching for file changes."""
-        self.watching = True
-        self.stop_watching.clear()
-        self.start_button.config(text="Stop Watching")
-        self.status_var.set("Watching for changes...")
-        self.status_label.config(foreground="orange")
-        
-        # Start watcher thread
-        self.watcher_thread = threading.Thread(target=self.watch_files, daemon=True)
-        self.watcher_thread.start()
-        
-        self.log("Started watching for schematic changes")
-        
-    def stop_watching_files(self):
-        """Stop watching for file changes."""
-        self.watching = False
-        self.stop_watching.set()
-        self.start_button.config(text="Start Watching")
-        self.status_var.set("Ready")
-        self.status_label.config(foreground="green")
-        
-        self.log("Stopped watching")
-        
-    def watch_files(self):
-        """File watching loop."""
-        interval = int(self.interval_var.get())
-        last_check = {}
-        
-        while not self.stop_watching.is_set():
-            try:
-                sch_files = list(self.project_path.glob("*.kicad_sch"))
-                files_changed = False
-                
-                for sch_file in sch_files:
-                    mtime = sch_file.stat().st_mtime
-                    if sch_file not in last_check or last_check[sch_file] != mtime:
-                        last_check[sch_file] = mtime
-                        files_changed = True
-                        self.log(f"Detected change in {sch_file.name}")
-                
-                if files_changed:
-                    self.generate_netlist("Schematic file changed")
-                    
-            except Exception as e:
-                self.log(f"Error during file watching: {e}")
-                
-            # Wait for interval or stop signal
-            self.stop_watching.wait(interval)
+            self.service.stop_monitoring()
             
     def generate_once(self):
         """Generate netlist once."""
-        if not self.project_path:
+        if not self.service.get_project_path():
             messagebox.showerror("Error", "Please select a project directory first")
             return
-            
-        self.generate_netlist("Manual generation")
         
-    def generate_netlist(self, reason: str = "Generated"):
-        """Generate the netlist summary."""
-        try:
-            # Find schematic files
-            sch_files = list(self.project_path.glob("*.kicad_sch"))
-            if not sch_files:
-                self.log("No .kicad_sch files found in project directory")
-                return
-                
-            self.log(f"Processing {len(sch_files)} schematic file(s)...")
+        # Sync current settings to service
+        self._sync_service_settings()
+        
+        # Use the service to generate
+        success = self.service.generate_netlist("Manual generation")
+        
+        if success:
+            # Update our local statistics display
+            self._update_statistics_from_service()
             
-            # Parse all files
-            parser = KiCadSchematicParser()
-            all_components = {}
-            all_nets = {}
-            
-            for sch_file in sch_files:
-                components, nets = parser.parse_file(sch_file)
-                all_components.update(components)
-                all_nets.update(nets)
-                
-            # Generate output
-            output_path = self.project_path / self.output_var.get()
-            with open(output_path, 'w') as f:
-                CompactFormatter.write(all_components, all_nets, f)
-                
-            # Calculate token statistics
-            self.token_stats.update_from_files(sch_files, output_path, all_components, all_nets)
+    def _update_statistics_from_service(self):
+        """Update statistics display from the service state."""
+        state = self.shared_state.get_state()
+        if state.token_stats:
+            self.token_stats.original_tokens = state.token_stats.get('original_tokens', 0)
+            self.token_stats.compressed_tokens = state.token_stats.get('compressed_tokens', 0)
+            self.token_stats.original_size = state.token_stats.get('original_size', 0)
+            self.token_stats.compressed_size = state.token_stats.get('compressed_size', 0)
+            self.token_stats.file_count = state.token_stats.get('file_count', 0)
+            self.token_stats.component_count = state.component_count
+            self.token_stats.net_count = state.net_count
+            self.token_stats.connection_count = state.connection_count
             self.update_statistics_display()
-            
-            # Update changelog
-            if self.changelog_manager:
-                self.changelog_manager.record_change(all_components, all_nets, reason)
-            
-            # Log results with token info
-            token_reduction = self.token_stats.token_reduction
-            self.log(f"Generated netlist: {len(all_components)} components, {len(all_nets)} nets")
-            self.log(f"Token reduction: {SimpleTokenizer.format_reduction(token_reduction)} "
-                    f"({SimpleTokenizer.format_number(self.token_stats.original_tokens)} → "
-                    f"{SimpleTokenizer.format_number(self.token_stats.compressed_tokens)})")
-            
-        except Exception as e:
-            self.log(f"Error generating netlist: {e}")
-            messagebox.showerror("Error", f"Failed to generate netlist: {e}")
             
     def open_output(self):
         """Open the output file."""
-        if self.project_path:
-            output_path = self.project_path / self.output_var.get()
+        project_path = self.service.get_project_path()
+        if project_path:
+            state = self.shared_state.get_state()
+            output_path = project_path / state.output_file
             if output_path.exists():
                 import subprocess
                 import sys
@@ -591,6 +615,37 @@ class KiCadNetlistGUI:
         """Toggle always on top setting."""
         self.root.attributes('-topmost', self.always_on_top.get())
         
+    def minimize_to_tray(self):
+        """Minimize the GUI and suggest using tray app."""
+        response = messagebox.askyesno(
+            "Minimize to Tray",
+            "The GUI will be minimized. Would you like to start the system tray application "
+            "for background monitoring?\n\nThe tray app runs in the background and provides "
+            "notifications when files change."
+        )
+        
+        if response:
+            self.start_tray_app()
+        
+        self.root.iconify()  # Minimize window
+        
+    def start_tray_app(self):
+        """Start the tray application in a separate process."""
+        import subprocess
+        import sys
+        
+        try:
+            # Start tray app as a separate process
+            subprocess.Popen([sys.executable, "-m", "kicad_netlist_tool", "tray"])
+            messagebox.showinfo(
+                "Tray Application",
+                "System tray application has been started!\n\n"
+                "Look for the KiCad icon in your system tray/menu bar.\n"
+                "Right-click the icon to access monitoring controls."
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start tray application: {e}")
+        
     def show_about(self):
         """Show about dialog."""
         messagebox.showinfo("About", 
@@ -610,8 +665,12 @@ class KiCadNetlistGUI:
         try:
             self.root.mainloop()
         finally:
-            if self.watching:
-                self.stop_watching_files()
+            # Clean up service callbacks
+            try:
+                self.service.remove_status_callback(self.on_status_change)
+                self.service.remove_log_callback(self.on_log_message)
+            except Exception:
+                pass  # Service might already be stopped
 
 
 def main():

@@ -22,6 +22,13 @@ def gui():
 
 
 @cli.command()
+def tray():
+    """Launch the system tray application."""
+    from .gui.tray_app import main as tray_main
+    tray_main()
+
+
+@cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file (default: stdout)')
 @click.option('--format', '-f', type=click.Choice(['compact', 'markdown', 'json']), 

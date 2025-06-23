@@ -1,0 +1,10 @@
+# Core dependencies
+sexpdata>=1.0.0  # For parsing KiCad S-expression format
+watchdog>=3.0.0  # For file watching functionality
+click>=8.0.0     # For CLI interface
+
+# Development dependencies
+pytest>=7.0.0
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.0.0

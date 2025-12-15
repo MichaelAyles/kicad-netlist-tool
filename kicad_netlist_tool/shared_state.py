@@ -15,7 +15,7 @@ from .tokenizer import TokenStats
 class AppState:
     """Shared application state."""
     project_path: Optional[str] = None
-    output_file: str = "netlist_summary.txt"
+    output_file: str = "netlist.tokn"
     monitoring: bool = False
     update_interval: int = 30
     last_update: Optional[str] = None

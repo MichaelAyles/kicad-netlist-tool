@@ -1,6 +1,34 @@
 """Parser for KiCad schematic files (.kicad_sch)."""
 
-# Import the enhanced parser
-from .parser_v2 import EnhancedKiCadParser as KiCadSchematicParser, Component, Net
+# Re-export TOKN parser components for backward compatibility
+from .tokn import (
+    Schematic,
+    Component,
+    Wire,
+    Junction,
+    Label,
+    LibSymbol,
+    Pin,
+    Point,
+    parse_schematic,
+    Netlist,
+    Net,
+    WireSegment,
+    analyze_connectivity,
+)
 
-__all__ = ['KiCadSchematicParser', 'Component', 'Net']
+__all__ = [
+    'Schematic',
+    'Component',
+    'Wire',
+    'Junction',
+    'Label',
+    'LibSymbol',
+    'Pin',
+    'Point',
+    'parse_schematic',
+    'Netlist',
+    'Net',
+    'WireSegment',
+    'analyze_connectivity',
+]

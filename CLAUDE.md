@@ -84,3 +84,8 @@ If implementing real-time monitoring, consider using:
 1. **KiCad File Formats**: Be aware that KiCad file formats can vary between versions
 2. **Performance**: Netlist files can be large for complex PCBs; consider streaming parsers
 3. **LLM Integration**: Design output format to be easily consumable by LLMs (structured JSON, markdown tables, etc.)
+
+## Git Workflow
+
+- If working on a feature branch, **ask before merging to main or opening PRs**
+- Do not push directly to main without explicit approval when on a branch

@@ -3,115 +3,130 @@
 import click
 from pathlib import Path
 import sys
-from .parser import KiCadSchematicParser
-from .formatter import CompactFormatter, MarkdownFormatter, JsonFormatter
-from .watcher import SchematicWatcher
+import time
+from .tokn import (
+    find_project_root,
+    parse_hierarchical_schematic,
+    encode_hierarchical_tokn,
+)
 
 
 @click.group()
 def cli():
-    """KiCad Netlist Tool - Extract component and netlist information."""
+    """KiCad Netlist Tool - Extract component and netlist information in TOKN format."""
     pass
 
 
 @cli.command()
 def gui():
     """Launch the GUI interface."""
-    from .gui.main_window import main as gui_main
+    from .gui.app import main as gui_main
     gui_main()
-
-
-@cli.command()
-def tray():
-    """Launch the system tray application."""
-    from .gui.tray_app import main as tray_main
-    tray_main()
 
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file (default: stdout)')
-@click.option('--format', '-f', type=click.Choice(['compact', 'markdown', 'json']), 
-              default='compact', help='Output format')
-def parse(path, output, format):
-    """Parse KiCad schematic file(s) and extract netlist."""
+def parse(path, output):
+    """Parse KiCad schematic file(s) and generate TOKN output."""
     path = Path(path)
-    
-    # Determine formatter
-    formatters = {
-        'compact': CompactFormatter,
-        'markdown': MarkdownFormatter,
-        'json': JsonFormatter
-    }
-    formatter = formatters[format]
-    
-    # Find schematic files
+
+    # Find root schematic
     if path.is_file() and path.suffix == '.kicad_sch':
-        schematic_files = [path]
+        root_sch = path
     elif path.is_dir():
-        schematic_files = list(path.glob('*.kicad_sch'))
+        root_sch, _ = find_project_root(path)
+        if not root_sch:
+            click.echo(f"No .kicad_sch files found in {path}", err=True)
+            sys.exit(1)
     else:
         click.echo(f"Error: {path} is not a .kicad_sch file or directory", err=True)
         sys.exit(1)
-    
-    if not schematic_files:
-        click.echo(f"No .kicad_sch files found in {path}", err=True)
+
+    try:
+        click.echo(f"Parsing {root_sch}...", err=True)
+        hier = parse_hierarchical_schematic(str(root_sch))
+        tokn = encode_hierarchical_tokn(hier)
+
+        if output:
+            Path(output).write_text(tokn, encoding='utf-8')
+            click.echo(f"Output written to {output}", err=True)
+        else:
+            click.echo(tokn)
+
+    except Exception as e:
+        click.echo(f"Error parsing schematic: {e}", err=True)
         sys.exit(1)
-    
-    # Parse all files
-    all_components = {}
-    all_nets = {}
-    
-    parser = KiCadSchematicParser()
-    for sch_file in schematic_files:
-        try:
-            click.echo(f"Parsing {sch_file}...", err=True)
-            components, nets = parser.parse_file(sch_file)
-            all_components.update(components)
-            all_nets.update(nets)
-        except Exception as e:
-            click.echo(f"Error parsing {sch_file}: {e}", err=True)
-            sys.exit(1)
-    
-    # Output results
-    if output:
-        with open(output, 'w') as f:
-            formatter.write(all_components, all_nets, f)
-        click.echo(f"Output written to {output}", err=True)
-    else:
-        formatter.write(all_components, all_nets, sys.stdout)
 
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
-@click.option('--output', '-o', type=click.Path(), default='netlist.txt',
-              help='Output file (default: netlist.txt)')
-@click.option('--format', '-f', type=click.Choice(['compact', 'markdown', 'json']), 
-              default='compact', help='Output format')
-@click.option('--interval', '-i', type=int, default=30,
-              help='Update interval in seconds (default: 30)')
-def watch(path, output, format, interval):
+@click.option('--output', '-o', type=click.Path(), default='netlist.tokn',
+              help='Output file (default: netlist.tokn)')
+@click.option('--interval', '-i', type=int, default=5,
+              help='Update interval in seconds (default: 5)')
+def watch(path, output, interval):
     """Watch KiCad project for changes and auto-update netlist."""
     path = Path(path)
-    output_path = Path(output)
-    
-    # Determine formatter
-    formatters = {
-        'compact': CompactFormatter,
-        'markdown': MarkdownFormatter,
-        'json': JsonFormatter
-    }
-    formatter = formatters[format]
-    
-    # Create watcher
-    watcher = SchematicWatcher(path, output_path, formatter, interval)
-    
-    click.echo(f"Watching {path} for changes...")
-    click.echo(f"Output will be written to {output_path}")
-    click.echo("Press Ctrl+C to stop")
-    
+    output_path = path / output if path.is_dir() else path.parent / output
+
+    # Find root schematic
+    if path.is_file() and path.suffix == '.kicad_sch':
+        project_dir = path.parent
+    elif path.is_dir():
+        project_dir = path
+    else:
+        click.echo(f"Error: {path} is not a .kicad_sch file or directory", err=True)
+        sys.exit(1)
+
+    root_sch, project_name = find_project_root(project_dir)
+    if not root_sch:
+        click.echo(f"No .kicad_sch files found in {project_dir}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Watching {project_dir} for changes...")
+    click.echo(f"Project: {project_name}")
+    click.echo(f"Output: {output_path}")
+    click.echo(f"Interval: {interval}s")
+    click.echo("Press Ctrl+C to stop\n")
+
+    # Track file modification times
+    mtimes = {}
+
+    def generate():
+        """Generate TOKN output."""
+        try:
+            hier = parse_hierarchical_schematic(str(root_sch))
+            tokn = encode_hierarchical_tokn(hier)
+            output_path.write_text(tokn, encoding='utf-8')
+            sheet_count = len(hier.sheets)
+            comp_count = sum(len(s.components) for _, s in hier.sheets)
+            click.echo(f"Updated: {sheet_count} sheets, {comp_count} components")
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+
+    # Initial generation
+    generate()
+
     try:
-        watcher.run()
+        while True:
+            changed = False
+
+            for sch_file in project_dir.glob("**/*.kicad_sch"):
+                try:
+                    mtime = sch_file.stat().st_mtime
+                    if sch_file in mtimes and mtimes[sch_file] != mtime:
+                        changed = True
+                        click.echo(f"Changed: {sch_file.name}")
+                    mtimes[sch_file] = mtime
+                except (OSError, IOError):
+                    pass
+
+            if changed:
+                generate()
+
+            time.sleep(interval)
+
     except KeyboardInterrupt:
         click.echo("\nStopping watcher...")
 

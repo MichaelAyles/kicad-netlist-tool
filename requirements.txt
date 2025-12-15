@@ -1,8 +1,5 @@
 # Core dependencies
-watchdog>=3.0.0  # For file watching functionality
 click>=8.0.0     # For CLI interface
-pystray>=0.19.0  # For system tray support
-Pillow>=8.0.0    # For tray icon image handling
 
 # Development dependencies
 pytest>=7.0.0

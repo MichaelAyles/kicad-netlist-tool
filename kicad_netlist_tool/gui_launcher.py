@@ -8,7 +8,7 @@ from pathlib import Path
 package_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(package_dir))
 
-from kicad_netlist_tool.gui.main_window import main
+from kicad_netlist_tool.gui.app import main
 
 if __name__ == "__main__":
     main()

@@ -1,11 +1,17 @@
-"""Simplified KiCad Netlist Tool GUI with sheet selection."""
+"""KiCad Netlist Tool GUI - CustomTkinter with columns layout."""
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
 from pathlib import Path
 import threading
 import time
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, Dict, Tuple
+
+try:
+    import tiktoken
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
 
 from ..tokn import (
     find_project_root,
@@ -13,134 +19,86 @@ from ..tokn import (
     HierarchicalSchematic,
     Schematic,
     encode_sheet_tokn,
-    encode_hierarchical_tokn,
 )
 
+# Use system theme
+ctk.set_appearance_mode("system")
+ctk.set_default_color_theme("blue")
 
-class SheetTreeView(ttk.Frame):
-    """Tree view with checkboxes for selecting schematic sheets."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
+class SheetTreeView(ctk.CTkScrollableFrame):
+    """Scrollable frame with checkboxes for sheet selection."""
 
-        # Create treeview with scrollbar
-        self.tree = ttk.Treeview(self, selectmode='none', show='tree')
-        scrollbar = ttk.Scrollbar(self, orient='vertical', command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
 
-        self.tree.pack(side='left', fill='both', expand=True)
-        scrollbar.pack(side='right', fill='y')
-
-        # Track checked items and sheet data
-        self.checked: set = set()
-        self.sheet_data: Dict[str, Tuple[str, Schematic]] = {}  # item_id -> (hier_path, schematic)
-
-        # Bind click to toggle checkbox
-        self.tree.bind('<Button-1>', self._on_click)
-        self.tree.bind('<space>', self._on_space)
-
-        # Configure tags for checkbox display
-        self.tree.tag_configure('checked', image='')
-        self.tree.tag_configure('unchecked', image='')
-
-    def _on_click(self, event):
-        """Handle click on tree item."""
-        item = self.tree.identify_row(event.y)
-        if item:
-            self._toggle_item(item)
-
-    def _on_space(self, event):
-        """Handle space key on selected item."""
-        selection = self.tree.selection()
-        if selection:
-            self._toggle_item(selection[0])
-
-    def _toggle_item(self, item):
-        """Toggle checkbox state for an item."""
-        if item in self.checked:
-            self.checked.discard(item)
-        else:
-            self.checked.add(item)
-        self._update_display(item)
-
-    def _update_display(self, item):
-        """Update the display text to show checkbox state."""
-        current_text = self.tree.item(item, 'text')
-        # Remove existing checkbox prefix
-        if current_text.startswith('[x] ') or current_text.startswith('[ ] '):
-            current_text = current_text[4:]
-
-        # Add new checkbox prefix
-        prefix = '[x] ' if item in self.checked else '[ ] '
-        self.tree.item(item, text=prefix + current_text)
+        self.checkboxes: Dict[str, ctk.CTkCheckBox] = {}
+        self.check_vars: Dict[str, ctk.BooleanVar] = {}
+        self.sheet_data: Dict[str, Tuple[str, Schematic]] = {}
 
     def clear(self):
-        """Clear all items from the tree."""
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.checked.clear()
+        """Clear all checkboxes."""
+        for widget in self.winfo_children():
+            widget.destroy()
+        self.checkboxes.clear()
+        self.check_vars.clear()
         self.sheet_data.clear()
 
     def load_hierarchy(self, hier: HierarchicalSchematic):
-        """Load a hierarchical schematic into the tree."""
+        """Load sheets from hierarchy."""
         self.clear()
 
-        # Build parent-child relationships from hierarchical paths
-        # Paths look like: "project", "project_SheetName", "project_SheetName_SubSheet"
-        items_by_path: Dict[str, str] = {}  # hier_path -> tree item id
-
-        for hier_path, schematic in hier.sheets:
-            # Determine parent
-            parts = hier_path.rsplit('_', 1)
-            parent_path = parts[0] if len(parts) > 1 and parts[0] in items_by_path else ''
-            parent_item = items_by_path.get(parent_path, '')
-
-            # Get display name
+        for i, (hier_path, schematic) in enumerate(hier.sheets):
+            # Get display name with indentation based on path depth
+            depth = hier_path.count('_')
             display_name = schematic.title or schematic.filename or hier_path.split('_')[-1]
             if hier_path == hier.project_name:
                 display_name = f"{hier.project_name} (root)"
 
-            # Insert into tree with checkbox prefix
-            item_id = self.tree.insert(parent_item, 'end', text=f'[x] {display_name}')
-            items_by_path[hier_path] = item_id
-            self.sheet_data[item_id] = (hier_path, schematic)
-            self.checked.add(item_id)  # Default to checked
+            # Create checkbox
+            var = ctk.BooleanVar(value=True)
+            indent = "    " * depth
+            cb = ctk.CTkCheckBox(
+                self,
+                text=f"{indent}{display_name}",
+                variable=var,
+                font=ctk.CTkFont(size=13),
+                height=28
+            )
+            cb.pack(anchor="w", pady=1, padx=5)
 
-        # Expand all items
-        for item in self.tree.get_children():
-            self._expand_all(item)
-
-    def _expand_all(self, item):
-        """Recursively expand all children."""
-        self.tree.item(item, open=True)
-        for child in self.tree.get_children(item):
-            self._expand_all(child)
+            self.checkboxes[hier_path] = cb
+            self.check_vars[hier_path] = var
+            self.sheet_data[hier_path] = (hier_path, schematic)
 
     def select_all(self):
         """Select all sheets."""
-        for item in self.sheet_data.keys():
-            self.checked.add(item)
-            self._update_display(item)
+        for var in self.check_vars.values():
+            var.set(True)
 
     def select_none(self):
         """Deselect all sheets."""
-        for item in self.sheet_data.keys():
-            self.checked.discard(item)
-            self._update_display(item)
+        for var in self.check_vars.values():
+            var.set(False)
 
-    def get_selected_sheets(self) -> List[Tuple[str, Schematic]]:
-        """Get list of (hier_path, schematic) for checked items."""
-        return [self.sheet_data[item] for item in self.checked if item in self.sheet_data]
+    def get_selected_sheets(self):
+        """Get list of selected (hier_path, schematic) tuples."""
+        return [
+            self.sheet_data[path]
+            for path, var in self.check_vars.items()
+            if var.get()
+        ]
 
 
-class KiCadApp:
-    """Main application window."""
+class KiCadApp(ctk.CTk):
+    """Main application window with two-column layout."""
 
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("KiCad Netlist Tool")
-        self.root.geometry("550x500")
-        self.root.minsize(450, 400)
+        super().__init__()
+
+        self.title("KiCad Netlist Tool")
+        self.geometry("900x650")
+        self.minsize(800, 550)
 
         # State
         self.project_path: Optional[Path] = None
@@ -148,127 +106,160 @@ class KiCadApp:
         self.monitoring = False
         self._stop_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
+        self._countdown_job = None
+        self._next_check_time = 0.0
+        self._loading_job = None
+        self._loading_dots = 0
 
         self._setup_ui()
-        self._setup_menu()
-
-    def _setup_menu(self):
-        """Setup menu bar."""
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-
-        # File menu
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Open Project...", command=self._browse_project)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
-
-        # Options menu
-        options_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Options", menu=options_menu)
-
-        self.always_on_top = tk.BooleanVar()
-        options_menu.add_checkbutton(
-            label="Always on Top",
-            variable=self.always_on_top,
-            command=self._toggle_always_on_top
-        )
-
-        self.include_wires = tk.BooleanVar(value=True)
-        options_menu.add_checkbutton(
-            label="Include Wire Geometry",
-            variable=self.include_wires
-        )
 
     def _setup_ui(self):
-        """Setup the main UI."""
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill='both', expand=True)
+        """Setup the two-column UI."""
+        # Main container
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Project selection section
-        project_frame = ttk.LabelFrame(main_frame, text="Project", padding="5")
-        project_frame.pack(fill='x', pady=(0, 10))
+        # Two columns: left (60%) and right (40%)
+        main.grid_columnconfigure(0, weight=3)
+        main.grid_columnconfigure(1, weight=2)
+        main.grid_rowconfigure(0, weight=1)
+
+        # === LEFT COLUMN ===
+        left = ctk.CTkFrame(main, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+
+        # Project section
+        proj_frame = ctk.CTkFrame(left)
+        proj_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        proj_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(proj_frame, text="Project", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
 
         # Path entry row
-        path_row = ttk.Frame(project_frame)
-        path_row.pack(fill='x')
+        path_row = ctk.CTkFrame(proj_frame, fg_color="transparent")
+        path_row.pack(fill="x", padx=10, pady=(0, 5))
 
-        self.project_var = tk.StringVar()
-        self.project_entry = ttk.Entry(path_row, textvariable=self.project_var)
-        self.project_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        self.project_var = ctk.StringVar()
+        self.project_entry = ctk.CTkEntry(path_row, textvariable=self.project_var, height=32)
+        self.project_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.project_entry.bind('<Return>', lambda e: self._load_project_from_entry())
 
-        ttk.Button(path_row, text="Browse...", command=self._browse_project).pack(side='right')
+        ctk.CTkButton(path_row, text="Browse", width=80, height=32, command=self._browse_project).pack(side="right")
 
-        # Quick access buttons
-        quick_row = ttk.Frame(project_frame)
-        quick_row.pack(fill='x', pady=(5, 0))
+        # Quick buttons
+        quick_row = ctk.CTkFrame(proj_frame, fg_color="transparent")
+        quick_row.pack(fill="x", padx=10, pady=(0, 10))
 
-        ttk.Button(quick_row, text="Examples", command=self._go_examples, width=10).pack(side='left', padx=(0, 5))
-        ttk.Button(quick_row, text="Home", command=self._go_home, width=10).pack(side='left', padx=(0, 5))
-        ttk.Button(quick_row, text="Current Dir", command=self._go_cwd, width=12).pack(side='left')
+        ctk.CTkButton(quick_row, text="Examples", width=80, height=28, command=self._go_examples).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(quick_row, text="Home", width=80, height=28, command=self._go_home).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(quick_row, text="Current", width=80, height=28, command=self._go_cwd).pack(side="left")
 
         # Sheets section
-        sheets_frame = ttk.LabelFrame(main_frame, text="Sheets", padding="5")
-        sheets_frame.pack(fill='both', expand=True, pady=(0, 10))
+        sheets_frame = ctk.CTkFrame(left)
+        sheets_frame.grid(row=1, column=0, sticky="nsew")
+        sheets_frame.grid_rowconfigure(1, weight=1)
+        sheets_frame.grid_columnconfigure(0, weight=1)
 
-        self.sheet_tree = SheetTreeView(sheets_frame)
-        self.sheet_tree.pack(fill='both', expand=True)
+        ctk.CTkLabel(sheets_frame, text="Sheets", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+
+        self.sheet_tree = SheetTreeView(sheets_frame, fg_color="transparent")
+        self.sheet_tree.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
 
         # Selection buttons
-        sel_row = ttk.Frame(sheets_frame)
-        sel_row.pack(fill='x', pady=(5, 0))
+        sel_row = ctk.CTkFrame(sheets_frame, fg_color="transparent")
+        sel_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
 
-        ttk.Button(sel_row, text="Select All", command=self.sheet_tree.select_all).pack(side='left', padx=(0, 5))
-        ttk.Button(sel_row, text="Select None", command=self.sheet_tree.select_none).pack(side='left')
+        ctk.CTkButton(sel_row, text="Select All", width=90, height=28, command=self.sheet_tree.select_all).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(sel_row, text="Select None", width=90, height=28, command=self.sheet_tree.select_none).pack(side="left")
+
+        # === RIGHT COLUMN ===
+        right = ctk.CTkFrame(main, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_columnconfigure(0, weight=1)
+
+        # Statistics section
+        stats_frame = ctk.CTkFrame(right)
+        stats_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        stats_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(stats_frame, text="Statistics", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
+
+        stats_content = ctk.CTkFrame(stats_frame, fg_color="transparent")
+        stats_content.pack(fill="x", padx=10, pady=(0, 10))
+
+        # Stats grid
+        self.stats_labels = {}
+        stats_data = [
+            ("sheets", "Sheets:"),
+            ("components", "Components:"),
+            ("nets", "Wires:"),
+            ("original", "Original:"),
+            ("tokn", "TOKN:"),
+            ("reduction", "Reduction:"),
+        ]
+
+        for i, (key, label) in enumerate(stats_data):
+            row = i // 2
+            col = (i % 2) * 2
+
+            ctk.CTkLabel(stats_content, text=label, font=ctk.CTkFont(size=12)).grid(row=row, column=col, sticky="w", padx=(0, 5), pady=2)
+            val_label = ctk.CTkLabel(stats_content, text="-", font=ctk.CTkFont(size=12, weight="bold"))
+            val_label.grid(row=row, column=col + 1, sticky="w", padx=(0, 15), pady=2)
+            self.stats_labels[key] = val_label
 
         # Output section
-        output_frame = ttk.LabelFrame(main_frame, text="Output", padding="5")
-        output_frame.pack(fill='x', pady=(0, 10))
+        output_frame = ctk.CTkFrame(right)
+        output_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        output_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(output_frame, text="Output", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
 
         # Filename row
-        file_row = ttk.Frame(output_frame)
-        file_row.pack(fill='x')
+        file_row = ctk.CTkFrame(output_frame, fg_color="transparent")
+        file_row.pack(fill="x", padx=10, pady=(0, 5))
 
-        ttk.Label(file_row, text="Filename:").pack(side='left')
-        self.output_var = tk.StringVar(value="netlist.tokn")
-        ttk.Entry(file_row, textvariable=self.output_var, width=25).pack(side='left', padx=(5, 0))
+        ctk.CTkLabel(file_row, text="Filename:", font=ctk.CTkFont(size=12)).pack(side="left")
+        self.output_var = ctk.StringVar(value="netlist.tokn")
+        ctk.CTkEntry(file_row, textvariable=self.output_var, width=150, height=28).pack(side="left", padx=(5, 0))
 
         # Action buttons
-        btn_row = ttk.Frame(output_frame)
-        btn_row.pack(fill='x', pady=(10, 0))
+        btn_row = ctk.CTkFrame(output_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(5, 10))
 
-        ttk.Button(btn_row, text="Copy to Clipboard", command=self._copy_to_clipboard).pack(side='left', padx=(0, 10))
-        ttk.Button(btn_row, text="Save to File", command=self._save_to_file).pack(side='left')
+        ctk.CTkButton(btn_row, text="Copy to Clipboard", height=36, command=self._copy_to_clipboard).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_row, text="Save to File", height=36, command=self._save_to_file).pack(side="left")
 
         # Monitoring section
-        monitor_frame = ttk.LabelFrame(main_frame, text="Monitoring", padding="5")
-        monitor_frame.pack(fill='x')
+        monitor_frame = ctk.CTkFrame(right)
+        monitor_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        monitor_frame.grid_columnconfigure(0, weight=1)
 
-        monitor_row = ttk.Frame(monitor_frame)
-        monitor_row.pack(fill='x')
+        ctk.CTkLabel(monitor_frame, text="Monitoring", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=10, pady=(10, 5))
 
-        self.watch_button = ttk.Button(monitor_row, text="Start Watching", command=self._toggle_monitoring)
-        self.watch_button.pack(side='left', padx=(0, 10))
+        mon_row = ctk.CTkFrame(monitor_frame, fg_color="transparent")
+        mon_row.pack(fill="x", padx=10, pady=(0, 10))
 
-        ttk.Label(monitor_row, text="Interval:").pack(side='left')
-        self.interval_var = tk.StringVar(value="5")
-        ttk.Spinbox(monitor_row, from_=1, to=60, width=5, textvariable=self.interval_var).pack(side='left', padx=(5, 0))
-        ttk.Label(monitor_row, text="sec").pack(side='left', padx=(2, 0))
+        self.watch_button = ctk.CTkButton(mon_row, text="Start Watching", width=130, height=32, command=self._toggle_monitoring)
+        self.watch_button.pack(side="left", padx=(0, 10))
 
-        # Status bar
-        status_frame = ttk.Frame(main_frame)
-        status_frame.pack(fill='x', pady=(10, 0))
+        ctk.CTkLabel(mon_row, text="Interval:", font=ctk.CTkFont(size=12)).pack(side="left")
+        self.interval_var = ctk.StringVar(value="60")
+        ctk.CTkEntry(mon_row, textvariable=self.interval_var, width=50, height=28).pack(side="left", padx=(5, 0))
+        ctk.CTkLabel(mon_row, text="sec", font=ctk.CTkFont(size=12)).pack(side="left", padx=(5, 0))
 
-        ttk.Label(status_frame, text="Status:").pack(side='left')
-        self.status_var = tk.StringVar(value="Select a project directory")
-        self.status_label = ttk.Label(status_frame, textvariable=self.status_var, foreground='gray')
-        self.status_label.pack(side='left', padx=(5, 0))
+        # Status bar (at bottom of right column)
+        status_frame = ctk.CTkFrame(right)
+        status_frame.grid(row=3, column=0, sticky="sew")
+        status_frame.grid_columnconfigure(0, weight=1)
 
-    def _toggle_always_on_top(self):
-        """Toggle always on top."""
-        self.root.attributes('-topmost', self.always_on_top.get())
+        self.status_var = ctk.StringVar(value="Select a project directory")
+        self.status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var, font=ctk.CTkFont(size=12))
+        self.status_label.pack(anchor="w", padx=10, pady=10)
+
+        # Make status stick to bottom
+        right.grid_rowconfigure(3, weight=1)
 
     def _browse_project(self):
         """Open directory browser."""
@@ -278,7 +269,7 @@ class KiCadApp:
             self._load_project(Path(directory))
 
     def _load_project_from_entry(self):
-        """Load project from the entry field."""
+        """Load project from entry field."""
         path_str = self.project_var.get().strip()
         if path_str:
             path = Path(path_str).expanduser().resolve()
@@ -288,31 +279,108 @@ class KiCadApp:
                 messagebox.showerror("Error", f"Directory not found: {path}")
 
     def _load_project(self, path: Path):
-        """Load a KiCad project from a directory."""
-        root_sch, project_name = find_project_root(path)
+        """Load a KiCad project (non-blocking)."""
+        # Update UI immediately and start loading animation
+        self.project_path = path
+        self.project_var.set(str(path))
+        self._loading_dots = 0
+        self._update_loading_status()
 
-        if not root_sch:
-            messagebox.showwarning("No Project Found", f"No KiCad schematic files found in:\n{path}")
+        # Do all heavy work in background thread
+        def parse_async():
+            try:
+                root_sch, project_name = find_project_root(path)
+                if not root_sch:
+                    self.after(0, lambda: self._on_no_project_found(path))
+                    return
+
+                hierarchy = parse_hierarchical_schematic(str(root_sch))
+                # Update UI on main thread
+                self.after(0, lambda: self._on_project_loaded(hierarchy, project_name))
+            except Exception as e:
+                self.after(0, lambda: self._on_project_error(e))
+
+        threading.Thread(target=parse_async, daemon=True).start()
+
+    def _on_no_project_found(self, path: Path):
+        """Called when no project is found."""
+        self._stop_loading_animation()
+        messagebox.showwarning("No Project Found", f"No KiCad schematic files found in:\n{path}")
+        self.status_var.set("No project found")
+
+    def _update_loading_status(self):
+        """Animate loading status."""
+        dots = "." * (self._loading_dots % 4)
+        self.status_var.set(f"Loading{dots}")
+        self._loading_dots += 1
+        self._loading_job = self.after(300, self._update_loading_status)
+
+    def _stop_loading_animation(self):
+        """Stop the loading animation."""
+        if self._loading_job:
+            self.after_cancel(self._loading_job)
+            self._loading_job = None
+
+    def _on_project_loaded(self, hierarchy: HierarchicalSchematic, project_name: str):
+        """Called when project parsing completes."""
+        self._stop_loading_animation()
+        self.hierarchy = hierarchy
+        self.sheet_tree.load_hierarchy(self.hierarchy)
+        self._update_statistics()
+        self.status_var.set(f"Loaded: {project_name}")
+
+    def _on_project_error(self, error: Exception):
+        """Called when project parsing fails."""
+        self._stop_loading_animation()
+        messagebox.showerror("Parse Error", f"Failed to parse schematic:\n{error}")
+        self.status_var.set(f"Error: {error}")
+
+    def _update_statistics(self):
+        """Update the statistics display."""
+        if not self.hierarchy:
             return
 
-        try:
-            self.hierarchy = parse_hierarchical_schematic(str(root_sch))
-            self.project_path = path
-            self.project_var.set(str(path))
+        selected = self.sheet_tree.get_selected_sheets()
 
-            # Load sheets into tree
-            self.sheet_tree.load_hierarchy(self.hierarchy)
+        sheet_count = len(selected)
+        comp_count = sum(len(s.components) for _, s in selected)
+        wire_count = sum(len(s.wires) for _, s in selected)
 
-            # Update status
-            sheet_count = len(self.hierarchy.sheets)
-            comp_count = sum(len(s.components) for _, s in self.hierarchy.sheets)
-            self.status_var.set(f"Loaded: {project_name} ({sheet_count} sheets, {comp_count} components)")
-            self.status_label.config(foreground='green')
+        self.stats_labels["sheets"].configure(text=str(sheet_count))
+        self.stats_labels["components"].configure(text=str(comp_count))
+        self.stats_labels["nets"].configure(text=str(wire_count))
 
-        except Exception as e:
-            messagebox.showerror("Parse Error", f"Failed to parse schematic:\n{e}")
-            self.status_var.set(f"Error: {e}")
-            self.status_label.config(foreground='red')
+        # Calculate token counts
+        tokn_output = self._generate_tokn()
+        if tokn_output and HAS_TIKTOKEN:
+            try:
+                enc = tiktoken.get_encoding("cl100k_base")
+                tokn_tokens = len(enc.encode(tokn_output))
+
+                # Estimate original tokens (rough: ~1 token per 4 chars of kicad_sch)
+                original_size = sum(
+                    len(s.raw_content) if hasattr(s, 'raw_content') else len(str(s.components)) * 50
+                    for _, s in selected
+                )
+                original_tokens = original_size // 4
+
+                if original_tokens > 0:
+                    reduction = (1 - tokn_tokens / original_tokens) * 100
+                    self.stats_labels["original"].configure(text=f"{original_tokens:,}")
+                    self.stats_labels["tokn"].configure(text=f"{tokn_tokens:,}")
+                    self.stats_labels["reduction"].configure(text=f"{reduction:.1f}%")
+                else:
+                    self.stats_labels["original"].configure(text="-")
+                    self.stats_labels["tokn"].configure(text=f"{tokn_tokens:,}")
+                    self.stats_labels["reduction"].configure(text="-")
+            except Exception:
+                self.stats_labels["original"].configure(text="-")
+                self.stats_labels["tokn"].configure(text="-")
+                self.stats_labels["reduction"].configure(text="-")
+        else:
+            self.stats_labels["original"].configure(text="-")
+            self.stats_labels["tokn"].configure(text="-")
+            self.stats_labels["reduction"].configure(text="-")
 
     def _go_examples(self):
         """Navigate to examples directory."""
@@ -329,19 +397,17 @@ class KiCadApp:
         self._load_project_from_entry()
 
     def _go_cwd(self):
-        """Navigate to current working directory."""
+        """Navigate to current directory."""
         self.project_var.set(str(Path.cwd()))
         self._load_project_from_entry()
 
     def _generate_tokn(self) -> Optional[str]:
         """Generate TOKN output for selected sheets."""
         if not self.hierarchy:
-            messagebox.showwarning("No Project", "Please load a project first")
             return None
 
         selected = self.sheet_tree.get_selected_sheets()
         if not selected:
-            messagebox.showwarning("No Selection", "Please select at least one sheet")
             return None
 
         lines = ['# TOKN v1']
@@ -363,29 +429,40 @@ class KiCadApp:
         return '\n'.join(lines)
 
     def _copy_to_clipboard(self):
-        """Copy TOKN output to clipboard."""
+        """Copy TOKN to clipboard."""
+        if not self.hierarchy:
+            messagebox.showwarning("No Project", "Please load a project first")
+            return
+
+        selected = self.sheet_tree.get_selected_sheets()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select at least one sheet")
+            return
+
         tokn = self._generate_tokn()
         if tokn:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(tokn)
-
-            selected = self.sheet_tree.get_selected_sheets()
+            self.clipboard_clear()
+            self.clipboard_append(tokn)
+            self._update_statistics()
             self.status_var.set(f"Copied {len(selected)} sheet(s) to clipboard")
-            self.status_label.config(foreground='blue')
 
     def _save_to_file(self):
-        """Save TOKN output to file."""
+        """Save TOKN to file."""
         if not self.project_path:
             messagebox.showwarning("No Project", "Please load a project first")
+            return
+
+        selected = self.sheet_tree.get_selected_sheets()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select at least one sheet")
             return
 
         tokn = self._generate_tokn()
         if tokn:
             output_path = self.project_path / self.output_var.get()
             output_path.write_text(tokn, encoding='utf-8')
-
+            self._update_statistics()
             self.status_var.set(f"Saved to {output_path.name}")
-            self.status_label.config(foreground='green')
 
     def _toggle_monitoring(self):
         """Toggle file monitoring."""
@@ -395,30 +472,51 @@ class KiCadApp:
             self._start_monitoring()
 
     def _start_monitoring(self):
-        """Start monitoring for file changes."""
+        """Start monitoring."""
         if not self.project_path:
             messagebox.showwarning("No Project", "Please load a project first")
             return
 
         self.monitoring = True
         self._stop_event.clear()
-        self.watch_button.config(text="Stop Watching")
-        self.status_var.set("Monitoring for changes...")
-        self.status_label.config(foreground='orange')
+        self.watch_button.configure(text="Stop Watching")
+
+        # Set initial countdown
+        try:
+            interval = int(self.interval_var.get())
+        except ValueError:
+            interval = 5
+        self._next_check_time = time.time() + interval
+        self._update_countdown()
 
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
 
     def _stop_monitoring(self):
-        """Stop monitoring for file changes."""
+        """Stop monitoring."""
         self.monitoring = False
         self._stop_event.set()
-        self.watch_button.config(text="Start Watching")
+        if self._countdown_job:
+            self.after_cancel(self._countdown_job)
+            self._countdown_job = None
+        self.watch_button.configure(text="Start Watching")
         self.status_var.set("Monitoring stopped")
-        self.status_label.config(foreground='gray')
+
+    def _update_countdown(self):
+        """Update the countdown display."""
+        if not self.monitoring:
+            return
+
+        remaining = max(0, self._next_check_time - time.time())
+        mins = int(remaining // 60)
+        secs = int(remaining % 60)
+        self.status_var.set(f"Monitoring: {mins}:{secs:02d}")
+
+        # Schedule next update
+        self._countdown_job = self.after(500, self._update_countdown)
 
     def _monitor_loop(self):
-        """Background thread for monitoring file changes."""
+        """Background monitoring loop."""
         mtimes: Dict[Path, float] = {}
 
         while not self._stop_event.is_set():
@@ -437,7 +535,7 @@ class KiCadApp:
                         pass
 
                 if changed:
-                    self.root.after(0, self._on_file_changed)
+                    self.after(0, self._on_file_changed)
 
             except Exception:
                 pass
@@ -447,43 +545,37 @@ class KiCadApp:
             except ValueError:
                 interval = 5
 
+            # Reset countdown for next check
+            self._next_check_time = time.time() + interval
+
             self._stop_event.wait(interval)
 
     def _on_file_changed(self):
-        """Handle file change detection."""
+        """Handle file change."""
         if not self.project_path or not self.monitoring:
             return
 
-        # Reload project
         root_sch, _ = find_project_root(self.project_path)
         if root_sch:
             try:
                 self.hierarchy = parse_hierarchical_schematic(str(root_sch))
                 self.sheet_tree.load_hierarchy(self.hierarchy)
 
-                # Auto-regenerate output
+                # Auto-save
                 tokn = self._generate_tokn()
                 if tokn:
                     output_path = self.project_path / self.output_var.get()
                     output_path.write_text(tokn, encoding='utf-8')
+                    self._update_statistics()
                     self.status_var.set(f"Updated: {output_path.name}")
-                    self.status_label.config(foreground='green')
             except Exception as e:
                 self.status_var.set(f"Error: {e}")
-                self.status_label.config(foreground='red')
-
-    def run(self):
-        """Run the application."""
-        try:
-            self.root.mainloop()
-        finally:
-            self._stop_event.set()
 
 
 def main():
     """Main entry point."""
     app = KiCadApp()
-    app.run()
+    app.mainloop()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # Core dependencies
-click>=8.0.0     # For CLI interface
+click>=8.0.0          # CLI interface
+customtkinter>=5.0    # Modern themed GUI
+tiktoken>=0.5.0       # Token counting
 
 # Development dependencies
 pytest>=7.0.0

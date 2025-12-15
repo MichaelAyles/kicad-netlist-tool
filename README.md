@@ -2,6 +2,8 @@
 
 Extract component and netlist information from KiCad schematics in TOKN format - a token-efficient representation optimized for LLM processing.
 
+![KiCad Netlist Tool Screenshot](assets/screenshot.png)
+
 ## Token Reduction
 
 KiCad schematic files contain extensive graphical and metadata information that consumes many tokens when used with LLMs. This tool extracts only the essential electrical information:

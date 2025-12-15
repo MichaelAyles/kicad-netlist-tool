@@ -33,6 +33,8 @@ Features:
 - **Save to file** - exports as `.tokn` file
 - **File monitoring** - watches for changes and auto-regenerates
 
+> **Note:** The system tray icon has been temporarily removed pending cross-platform testing. The tool has been updated from the legacy format to use TOKN v1.2.
+
 ### Command Line
 
 ```bash

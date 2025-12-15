@@ -12,11 +12,16 @@ KiCad schematic files contain extensive graphical and metadata information that 
 |-----------|----------|-------------|-----------|
 | ECC83-pp | 55KB (26,000 tokens) | ~900 tokens | 96.5% |
 
-## Installation
+## Quick Start
 
 ```bash
+git clone https://github.com/MichaelAyles/kicad-netlist-tool.git
+cd kicad-netlist-tool
 pip install -e .
+kicad-netlist-gui
 ```
+
+Point it at your KiCad project folder, select the sheets you want, and hit "Copy to Clipboard".
 
 ## Usage
 
